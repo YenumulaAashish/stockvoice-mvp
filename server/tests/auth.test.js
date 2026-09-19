@@ -1,0 +1,67 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import request from 'supertest';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import { createApp } from '../app.js';
+import { memoryStore, seed } from '../store.js';
+import { register, jwtSecret } from './fixtures.js';
+const config = { demo: true, port: 3001, jwtSecret };
+const product = { name: 'Rice', unit: 'kg', quantity: 12, price: 60, lowStockThreshold: 15 };
+test('signup hashes passwords, returns only public fields and sets HttpOnly cookie', async () => {
+  const store = memoryStore([]), app = createApp(store, config);
+  const { agent, user, cookie } = await register(app);
+  const saved = await store.users.findById(user.id);
+  assert.equal(user.passwordHash, undefined); assert.equal(user.emailVerified, false);
+  assert.equal(saved.password, undefined); assert.ok(await bcrypt.compare('Testpass123', saved.passwordHash));
+  assert.ok(cookie.startsWith('stockvoice_auth='));
+  const login = await agent.post('/api/auth/login').send({ identifier: user.email.toUpperCase(), password: 'Testpass123' }).expect(200);
+  assert.match(login.headers['set-cookie'][0], /HttpOnly/); assert.match(login.headers['set-cookie'][0], /SameSite=Lax/);
+  await agent.get('/api/auth/me').expect(200);
+});
+test('case-insensitive unique accounts, password mismatch and invalid credentials', async () => {
+  const app = createApp(memoryStore([]), config);
+  const { body } = await register(app);
+  await request(app).post('/api/auth/signup').send({ ...body, username: body.username.toUpperCase(), email: 'different@example.com' }).expect(409);
+  await request(app).post('/api/auth/signup').send({ ...body, username: 'different', email: body.email.toUpperCase() }).expect(409);
+  for (const update of [{ confirmPassword: 'wrong' }, { password: 'noDigitsHere', confirmPassword: 'noDigitsHere' }, { username: 'ab' }, { email: 'invalid' }, { fullName: ' ' }]) await request(app).post('/api/auth/signup').send({ ...body, ...update }).expect(400);
+  const wrong = await request(app).post('/api/auth/login').send({ identifier: body.username, password: 'wrongpassword' }).expect(401);
+  const missing = await request(app).post('/api/auth/login').send({ identifier: 'missing', password: 'wrongpassword' }).expect(401);
+  assert.equal(wrong.body.error, missing.body.error);
+  await request(app).post('/api/auth/login').send({ identifier: body.username.toUpperCase(), password: body.password }).expect(200);
+});
+test('every inventory API is protected; expired and logged-out tokens are rejected', async () => {
+  const app = createApp(memoryStore([]), config);
+  for (const path of ['/api/dashboard', '/api/auth/me']) await request(app).get(path).expect(401);
+  for (const path of ['/api/commands', '/api/products/prepare', '/api/confirmations/any', '/api/transcribe']) await request(app).post(path).send({}).expect(401);
+  const { agent, user, cookie } = await register(app);
+  const expired = jwt.sign({ version: 0 }, jwtSecret, { subject: user.id, expiresIn: -1, issuer: 'stockvoice', audience: 'stockvoice-web' });
+  await request(app).get('/api/dashboard').set('Cookie', `stockvoice_auth=${expired}`).expect(401);
+  await agent.post('/api/auth/logout').send({}).expect(204);
+  await agent.get('/api/dashboard').expect(401);
+  await request(app).get('/api/dashboard').set('Cookie', cookie).expect(401);
+});
+test('two users cannot read, modify, delete or confirm each other’s inventory', async () => {
+  const store = memoryStore(seed()), app = createApp(store, config);
+  const a = await register(app, 'alpha'), b = await register(app, 'beta');
+  // Legacy records remain unassigned, not automatically claimed by the first signup.
+  assert.equal((await a.agent.get('/api/dashboard')).body.products.length, 0);
+  const preview = await a.agent.post('/api/products/prepare').send({ operation: 'CREATE', product }).expect(200);
+  await b.agent.post(`/api/confirmations/${preview.body.confirmation.id}`).send({}).expect(409);
+  const saved = await a.agent.post(`/api/confirmations/${preview.body.confirmation.id}`).send({}).expect(200);
+  const id = saved.body.product.id;
+  assert.equal(saved.body.product.ownerId, a.user.id);
+  const bDashboard = await b.agent.get('/api/dashboard').expect(200);
+  assert.deepEqual(bDashboard.body.products, []); assert.deepEqual(bDashboard.body.transactions, []);
+  for (const operation of ['UPDATE', 'DELETE']) await b.agent.post('/api/products/prepare').send({ operation, id, ...(operation === 'UPDATE' ? { product } : {}) }).expect(404);
+  await b.agent.post('/api/commands').send({ transcript: 'check Rice' }).expect(400);
+  const low = await b.agent.post('/api/commands').send({ transcript: 'low stock' }).expect(200); assert.deepEqual(low.body.products, []);
+  await b.agent.post('/api/products/prepare').send({ operation: 'CREATE', product: { ...product, ownerId: a.user.id } }).expect(400);
+  const bPreview = await b.agent.post('/api/products/prepare').send({ operation: 'CREATE', product }).expect(200);
+  await b.agent.post(`/api/confirmations/${bPreview.body.confirmation.id}`).send({}).expect(200);
+  const add = await a.agent.post('/api/commands').send({ transcript: 'add 5 kg Rice' }).expect(200);
+  await a.agent.post(`/api/confirmations/${add.body.confirmation.id}`).send({}).expect(200);
+  assert.equal((await a.agent.get('/api/dashboard')).body.products[0].quantity, 17);
+  assert.equal((await b.agent.get('/api/dashboard')).body.products[0].quantity, 12);
+  assert.ok((await a.agent.get('/api/dashboard')).body.transactions.every(t => t.ownerId === a.user.id));
+});
