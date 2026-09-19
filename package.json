@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,client \"node --watch server/index.js\" \"vite --host 127.0.0.1\"",
-    "build": "vite build",
+    "build": "vite build --configLoader runner",
     "start": "node server/index.js",
     "test": "node --test server/tests/*.test.js",
     "check:gemini": "node server/check-gemini.js"

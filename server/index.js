@@ -33,15 +33,18 @@ const config = {
   sttModel:
     process.env.STT_MODEL ||
     'gemini-3.5-transcribe',
-
-  // Compatibility for existing mic-enable logic
-  sttKey:
-    process.env.GEMINI_API_KEY
+  sttProvider:
+    process.env.STT_PROVIDER ||
+    'gemini'
 };
+
+if (config.sttProvider !== 'gemini') {
+  throw new Error('STT_PROVIDER must be gemini.');
+}
 
 if (!config.demo && !process.env.MONGODB_URI) {
   throw new Error(
-    'Set MONGODB_URI or copy .env.example to .env for demo mode.'
+    'Set MONGODB_URI for live mode, or explicitly set DEMO_MODE=true for an in-memory demo.'
   );
 }
 
@@ -58,6 +61,10 @@ const dist = fileURLToPath(
   new URL('../dist', import.meta.url)
 );
 
+if (config.production && !existsSync(dist)) {
+  throw new Error('Production build is missing. Run npm run build before npm start.');
+}
+
 if (existsSync(dist)) {
   app.use(express.static(dist));
 
@@ -69,7 +76,10 @@ if (existsSync(dist)) {
 }
 
 const host =
-  process.env.HOST || '127.0.0.1';
+  process.env.HOST ||
+  (config.production
+    ? '0.0.0.0'
+    : '127.0.0.1');
 
 const server = app.listen(
   config.port,

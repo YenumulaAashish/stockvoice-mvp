@@ -16,7 +16,7 @@ On macOS/Linux, replace the copy command with `cp .env.example .env`.
 
 Open **http://localhost:5173** and create an account. Before starting, add a random JWT_SECRET of at least 32 characters to .env (see the authentication section below). The frontend proxies API requests to Express on port 3001. Both processes start with one command. If PowerShell blocks `npm.ps1`, use `npm.cmd` in place of `npm`.
 
-The example environment sets `DEMO_MODE=true`: an in-memory database, and a small English command parser. **Data resets on server restart.** Demo mode does not claim multilingual AI support. It accepts these exact command shapes (case-insensitive):
+For an offline demo, set `NODE_ENV=development`, `DEMO_MODE=true`, `HOST=127.0.0.1`, and `PORT=3001` in your local .env. This uses: an in-memory database, and a small English command parser. **Data resets on server restart.** Demo mode does not claim multilingual AI support. It accepts these exact command shapes (case-insensitive):
 
 ```text
 add 5 kg Rice
@@ -159,7 +159,7 @@ server/tests/app.test.js     Automated safety and adapter tests
 
 ## MVP boundaries
 
-This is a local hackathon app with authenticated, per-user inventory. It binds to 127.0.0.1 by default. Public deployment still requires HTTPS and deployment-specific origin rules. Mobile layouts work at narrow screen sizes; phone microphone access requires HTTPS.
+This is a hackathon app with authenticated, per-user inventory. Development defaults to 127.0.0.1; production defaults to 0.0.0.0 and accepts same-domain requests. Public deployment requires HTTPS. Mobile layouts work at narrow screen sizes; phone microphone access requires HTTPS.
 
 For simplicity the MongoDB adapter loads the small store into memory per operation, compares changes, then commits only changed records in a transaction. This suits a hackathon inventory, not a large production catalog. Restarting demo mode discards all demo state; live state and pending confirmations persist in MongoDB. There is no undo, no sales accounting, no unit conversion, and no offline speech model bundled.
 
@@ -231,3 +231,30 @@ Run this from the project folder. It transfers only records without ownerId, nev
 Native speechSynthesis uses installed OS/browser voices. Telugu may not be installed and some browsers restrict asynchronous speech. The app still displays Telugu and attempts te-IN, shows a warning when no Telugu voice is found, and never changes your selection. Known grocery names and unit labels have small deterministic translations; unknown product names retain their catalog spelling. Input language remains dedicated to transcription, and output quantities always come from the backend. No external TTS service is used.
 
 `npm test` includes separate users, ownership attacks, cookie flags, password hashing, duplicate accounts, invalid credentials, token expiry, logout revocation, all existing stock safeguards, retries and bilingual response templates. Tests use the in-memory repository and mocked AI; perform the live MongoDB and browser speech demo above on your machine as well.
+
+
+## Deploy frontend and backend as one Node service
+
+Use Node.js 22.12 or newer. Select the folder containing this package.json as the service root. Build with `npm install --include=dev && npm run build`; start with `npm start`. Build dependencies must be installed because Vite and Tailwind are devDependencies. Express serves dist and /api on the same domain, including refreshes of /login, /signup, and /dashboard. No separate frontend API URL is needed.
+
+Set these hosting environment values (enter secrets only in the provider's environment settings):
+
+```dotenv
+NODE_ENV=production
+DEMO_MODE=false
+MONGODB_URI=<your Atlas connection secret>
+MONGODB_DB=stockvoice
+GEMINI_API_KEY=<your active key>
+GEMINI_MODEL=gemini-3.6-flash
+STT_PROVIDER=gemini
+STT_MODEL=gemini-3.5-transcribe
+JWT_SECRET=<a stable random secret of at least 32 characters>
+```
+
+Leave HOST unset (defaults to 0.0.0.0 in production) and let the provider supply PORT. If HOST is required, use 0.0.0.0. Do not upload your local .env or copy its local HOST/PORT settings to hosting. Keep NODE_ENV=development for local npm run dev; the production template is not an offline demo configuration.
+
+In Atlas Network Access, allow your hosting service's outbound addresses. For a temporary hackathon you can allow 0.0.0.0/0, which permits connections from any IP; restrict it to the hosting addresses when possible. The database still requires its credentials. No Atlas settings are changed by this project.
+
+Production uses Secure, HTTP-only, SameSite=Lax authentication cookies and therefore requires HTTPS for browser login. The app trusts one reverse proxy, suitable for a single hosting ingress; adjust that setting if your deployment uses a different proxy topology. Gemini and MongoDB secrets stay on the server. Microphone access requires HTTPS and user permission; installed browser/OS voices determine Telugu speech availability.
+
+After deployment: open /signup, create an account, add Rice manually and confirm; add 5 kg by text and confirm; refresh to check persistence; test microphone input and both reply languages; log out and sign in with a second account to check isolation. Test a removal larger than stock and verify it is rejected. AI quota and actual device microphone/voice support require a live smoke test.

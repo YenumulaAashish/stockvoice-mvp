@@ -11,10 +11,16 @@ import { transcribe } from './services/stt.js';
 export function createApp(store, config, dependencies = {}) {
   const app = express();
   app.disable('x-powered-by');
+  if (config.production) app.set('trust proxy', 1);
   app.use(express.json({ limit: '16kb' }));
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
-    if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin && !['http://localhost:5173', 'http://127.0.0.1:5173', `http://localhost:${config.port}`, `http://127.0.0.1:${config.port}`].includes(req.headers.origin)) return res.status(403).json({ error: 'Origin not allowed.' });
+    if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin) {
+      let originHost;
+      try { originHost = new URL(req.headers.origin).host; } catch { return res.status(403).json({ error: 'Origin not allowed.' }); }
+      const developmentOrigins = new Set(['localhost:5173', '127.0.0.1:5173', `localhost:${config.port}`, `127.0.0.1:${config.port}`]);
+      if (originHost !== req.headers.host && (config.production || !developmentOrigins.has(originHost))) return res.status(403).json({ error: 'Origin not allowed.' });
+    }
     next();
   });
   app.use('/api', rateLimit({ windowMs: 60000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many requests. Wait a minute and try again.' } }));

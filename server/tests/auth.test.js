@@ -19,6 +19,12 @@ test('signup hashes passwords, returns only public fields and sets HttpOnly cook
   assert.match(login.headers['set-cookie'][0], /HttpOnly/); assert.match(login.headers['set-cookie'][0], /SameSite=Lax/);
   await agent.get('/api/auth/me').expect(200);
 });
+test('production authentication cookie is Secure and same-site', async () => {
+  const app = createApp(memoryStore([]), { ...config, production: true });
+  const result = await request(app).post('/api/auth/signup').set('Origin', 'https://stockvoice.example').set('Host', 'stockvoice.example').send({ fullName: 'Production User', username: 'production', email: 'production@example.com', password: 'Testpass123', confirmPassword: 'Testpass123' }).expect(201);
+  const cookie = result.headers['set-cookie'][0];
+  assert.match(cookie, /HttpOnly/); assert.match(cookie, /SameSite=Lax/); assert.match(cookie, /Secure/);
+});
 test('case-insensitive unique accounts, password mismatch and invalid credentials', async () => {
   const app = createApp(memoryStore([]), config);
   const { body } = await register(app);

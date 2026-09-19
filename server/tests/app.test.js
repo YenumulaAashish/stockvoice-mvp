@@ -110,3 +110,11 @@ test('cross-origin mutation and missing voice settings produce actionable errors
   await agent.post('/api/commands').set('Origin', 'https://evil.example').send({ transcript: 'check Rice' }).expect(403);
   await agent.post('/api/transcribe').expect(503);
 });
+test('production accepts same-origin mutations and rejects cross-origin mutations', async () => {
+  const store = memoryStore();
+  const app = createApp(store, { demo: true, port: 3001, jwtSecret, production: true });
+  const { agent, user, cookie } = await register(app, 'origin');
+  await seedOwner(store, user.id);
+  await agent.post('/api/commands').set('Cookie', cookie).set('Host', 'stockvoice.example').set('Origin', 'https://stockvoice.example').send({ transcript: 'check Rice' }).expect(200);
+  await agent.post('/api/commands').set('Host', 'stockvoice.example').set('Origin', 'https://evil.example').send({ transcript: 'check Rice' }).expect(403);
+});
